@@ -1,0 +1,359 @@
+//@version=6
+strategy("ICT — Liquidity Sweep · MSS · FVG (index futures)",
+     shorttitle = "SWEEP-MSS-FVG",
+     overlay = true,
+     initial_capital = 25000,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 1,
+     margin_long = 5,       // futures margin is ~4-5% of notional; the v5+
+     margin_short = 5,      // default of 100% silently rejects every order
+     commission_type = strategy.commission.cash_per_contract,
+     commission_value = 2.25,
+     slippage = 1,
+     calc_on_every_tick = false,
+     process_orders_on_close = true)
+
+//──────────────────────────────────────────────────────────────────────────────
+// Liquidity sweep → Market Structure Shift → Fair Value Gap entry.
+//
+// Setup lifecycle:  Pool identified → Sweep → MSS (displacement) → FVG →
+//                   limit order in the gap → stop beyond the sweep extreme.
+// Each setup is tracked by an explicit state machine, so a stale or
+// invalidated setup can never leak into a trade.
+//
+// Every rule below is stated as a testable condition. Where a concept has more
+// than one defensible definition (what confirms a sweep, which FVG edge is the
+// entry, what the target is) the choice is an input, not a silent default.
+//
+// Anti-repaint rules used throughout:
+//   · Daily pools read the last CLOSED daily bar (`high[1]` + lookahead_on).
+//   · Swing pools come from ta.pivothigh/pivotlow, which confirm `pivotRight`
+//     bars after the extreme — lagging, but immutable once set.
+//   · Every state transition is evaluated on bar close; nothing intrabar.
+//   · Entries are resting limit orders, so a fill is a real touch of the gap,
+//     not a same-bar assumption.
+//
+// The "Look-ahead A/B demo" input group deliberately reintroduces the classic
+// request.security() leak so the two equity curves can be compared side by
+// side in the Strategy Tester. See REPAINTING.md.
+//──────────────────────────────────────────────────────────────────────────────
+
+// ── Inputs ───────────────────────────────────────────────────────────────────
+grpP = "Liquidity pools (BSL / SSL)"
+usePrevDay  = input.bool(true,  "Previous day high / low", group = grpP)
+useSwings   = input.bool(true,  "Confirmed swing highs / lows", group = grpP)
+pivL        = input.int(5, "Pivot left bars",  minval = 1, group = grpP)
+pivR        = input.int(5, "Pivot right bars", minval = 1, group = grpP)
+requireEqual= input.bool(false, "Only sweep equal highs / equal lows", group = grpP,
+     tooltip = "Two consecutive confirmed swings within the tolerance below. Fewer setups, cleaner pools.")
+eqTicks     = input.int(8, "Equal-high/low tolerance (ticks)", minval = 1, group = grpP)
+
+grpS = "Sweep"
+sweepConfirm = input.string("Close back inside", "A sweep is confirmed by",
+     options = ["Close back inside", "Defer to MSS displacement"], group = grpS,
+     tooltip = "Close back inside: the sweeping bar must trade through the pool and CLOSE back on the origin side. " +
+               "Defer: the wick through the pool arms the setup and the displacement of the MSS is the only confirmation.")
+sweepMaxBars = input.int(12, "Bars allowed from sweep to MSS", minval = 1, group = grpS)
+
+grpM = "Market Structure Shift"
+dispMult = input.float(1.0, "Displacement: body ≥ ATR ×", minval = 0.1, step = 0.1, group = grpM)
+atrLen   = input.int(14, "ATR length", minval = 2, group = grpM)
+
+grpF = "Fair Value Gap & entry"
+fvgSearchBars = input.int(6, "Bars after MSS to find the FVG", minval = 1, group = grpF)
+fvgEdge       = input.string("Proximal", "Enter at which gap edge",
+     options = ["Proximal", "Distal", "Midpoint"], group = grpF,
+     tooltip = "Proximal = the near edge price reaches first. Distal = the far edge (full gap fill). Fewer fills, better price.")
+minGapTicks   = input.int(4, "Ignore gaps thinner than (ticks)", minval = 1, group = grpF)
+armedMaxBars  = input.int(20, "Cancel the order if unfilled after (bars)", minval = 1, group = grpF)
+
+grpX = "Risk & exits"
+stopBufferAtr = input.float(0.25, "Stop buffer beyond sweep extreme (ATR ×)", minval = 0.0, step = 0.05, group = grpX)
+targetMode    = input.string("Opposing liquidity", "Target",
+     options = ["Opposing liquidity", "R multiple"], group = grpX)
+rMult         = input.float(2.0, "R multiple (fallback when no pool)", minval = 0.5, step = 0.25, group = grpX)
+
+grpK = "Sessions & kill zones"
+requireKz = input.bool(true, "Only take setups inside a kill zone", group = grpK)
+tz        = input.string("America/New_York", "Session timezone", group = grpK)
+useLondon = input.bool(true, "London kill zone", group = grpK)
+londonKz  = input.session("0200-0500", "London window", group = grpK)
+useNy     = input.bool(true, "New York kill zone", group = grpK)
+nyKz      = input.session("0830-1100", "New York window", group = grpK)
+
+grpG = "Prop-firm guards"
+useDailyLock = input.bool(true, "Stop trading after a daily loss", group = grpG)
+maxDailyLoss = input.float(600, "Daily loss limit (account currency)", minval = 1, group = grpG)
+useFlatten   = input.bool(true, "Flatten at a fixed time", group = grpG)
+flattenSess  = input.session("1555-1600", "Flatten window", group = grpG)
+
+grpD = "Look-ahead A/B demo"
+leakMode = input.bool(false, "DEMO — leak the CURRENT day's high/low into history", group = grpD,
+     tooltip = "OFF (default) is the honest build: pools are the PREVIOUS day's extremes. " +
+               "ON reproduces the classic request.security() look-ahead bug, where every intraday bar already " +
+               "knows today's final high and low. Compare the two equity curves in the Strategy Tester: " +
+               "the difference is the size of the lie, not the size of the edge.")
+
+// ── Daily liquidity pools ────────────────────────────────────────────────────
+// `expr[1]` + lookahead_on is the documented NON-repainting form: it returns
+// the last COMPLETED daily bar on both historical and realtime bars.
+// Dropping the [1] is the bug — on historical bars it hands back the finished
+// value of the day the bar belongs to, i.e. the future.
+pdhHonest = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_on)
+pdlHonest = request.security(syminfo.tickerid, "D", low[1],  lookahead = barmerge.lookahead_on)
+pdhLeaked = request.security(syminfo.tickerid, "D", high,    lookahead = barmerge.lookahead_on)
+pdlLeaked = request.security(syminfo.tickerid, "D", low,     lookahead = barmerge.lookahead_on)
+pdh = usePrevDay ? (leakMode ? pdhLeaked : pdhHonest) : na
+pdl = usePrevDay ? (leakMode ? pdlLeaked : pdlHonest) : na
+
+// ── Confirmed swing pools ────────────────────────────────────────────────────
+ph = ta.pivothigh(high, pivL, pivR)
+pl = ta.pivotlow(low,  pivL, pivR)
+var float swingHigh     = na
+var float swingLow      = na
+var float prevSwingHigh = na
+var float prevSwingLow  = na
+if not na(ph)
+    prevSwingHigh := swingHigh
+    swingHigh     := ph
+if not na(pl)
+    prevSwingLow := swingLow
+    swingLow     := pl
+
+eqTol   = eqTicks * syminfo.mintick
+// `not na(...) and` first: a comparison against na is itself na, which is
+// falsy — the guard has to special-case the virgin state explicitly.
+eqHighs = not na(swingHigh) and not na(prevSwingHigh) and math.abs(swingHigh - prevSwingHigh) <= eqTol
+eqLows  = not na(swingLow)  and not na(prevSwingLow)  and math.abs(swingLow  - prevSwingLow)  <= eqTol
+
+swingHighPool = useSwings and (not requireEqual or eqHighs) ? swingHigh : na
+swingLowPool  = useSwings and (not requireEqual or eqLows)  ? swingLow  : na
+// Previous-day levels are pools in their own right; the "equal" filter is a
+// property of paired swings and does not apply to them.
+dayHighPool   = requireEqual ? na : pdh
+dayLowPool    = requireEqual ? na : pdl
+
+// Liquidity gets taken nearest-first, so the active pool is the closest level
+// on each side of price, not the most recent one.
+nearestAbove(float a, float b, float px) =>
+    ca = not na(a) and a > px ? a : na
+    cb = not na(b) and b > px ? b : na
+    na(ca) ? cb : na(cb) ? ca : math.min(ca, cb)
+
+nearestBelow(float a, float b, float px) =>
+    ca = not na(a) and a < px ? a : na
+    cb = not na(b) and b < px ? b : na
+    na(ca) ? cb : na(cb) ? ca : math.max(ca, cb)
+
+bslPool = nearestAbove(dayHighPool, swingHighPool, close)
+sslPool = nearestBelow(dayLowPool,  swingLowPool,  close)
+
+// ── Sessions, guards ─────────────────────────────────────────────────────────
+atr      = ta.atr(atrLen)
+inLondon = useLondon and not na(time(timeframe.period, londonKz, tz))
+inNy     = useNy     and not na(time(timeframe.period, nyKz,     tz))
+inKz     = inLondon or inNy
+kzOk     = not requireKz or inKz
+
+var float dayStartEquity = na
+if na(dayStartEquity) or timeframe.change("D")
+    dayStartEquity := strategy.equity
+dayPnl     = strategy.equity - dayStartEquity
+lossLocked = useDailyLock and dayPnl <= -maxDailyLoss
+
+inFlatten = useFlatten and not na(time(timeframe.period, flattenSess, tz))
+if inFlatten and strategy.position_size != 0
+    strategy.close_all("flatten", alert_message = '{"strategy":"SWEEP-MSS-FVG","action":"flatten","symbol":"' + syminfo.ticker + '"}')
+
+// ── Setup state machine ──────────────────────────────────────────────────────
+ST_IDLE  = 0
+ST_SWEPT = 1
+ST_MSS   = 2
+ST_ARMED = 3
+
+type Setup
+    int   state    = 0
+    int   dir      = 0     // +1 long (SSL swept) · -1 short (BSL swept)
+    float pool     = na    // the liquidity level that was taken
+    float sweepExt = na    // extreme printed while taking it — the stop anchor
+    float oppPool  = na    // liquidity on the other side — the target
+    float gapTop   = na
+    float gapBot   = na
+    int   stateBar = 0
+
+method reset(Setup s) =>
+    s.state    := ST_IDLE
+    s.dir      := 0
+    s.pool     := na
+    s.sweepExt := na
+    s.oppPool  := na
+    s.gapTop   := na
+    s.gapBot   := na
+    s.stateBar := 0
+
+method entryPrice(Setup s) =>
+    switch fvgEdge
+        "Proximal" => s.dir > 0 ? s.gapTop : s.gapBot
+        "Distal"   => s.dir > 0 ? s.gapBot : s.gapTop
+        => (s.gapTop + s.gapBot) / 2
+
+var Setup su = Setup.new()
+
+// Bracket levels survive the setup that produced them: once filled, the trade
+// is managed from these, not from the (already reset) setup object.
+var float liveStop = na
+var float liveTgt  = na
+var string liveId  = na
+
+// Each pool fires at most one setup: a sweep is an event, not a state.
+var float usedBsl = na
+var float usedSsl = na
+
+// Funnel counters — how far setups get before they die.
+var int nSweep = 0
+var int nMss   = 0
+var int nFvg   = 0
+var int nFill  = 0
+var int nExpire= 0
+
+stateBefore = su.state
+expired = su.state != ST_IDLE and bar_index - su.stateBar >
+     (su.state == ST_SWEPT ? sweepMaxBars : su.state == ST_MSS ? fvgSearchBars : armedMaxBars)
+
+if strategy.position_size != 0
+    // A live trade owns the chart; the next setup starts from scratch.
+    su.reset()
+else
+    if expired
+        strategy.cancel("ICT-L")
+        strategy.cancel("ICT-S")
+        liveId  := na
+        liveStop := na
+        liveTgt  := na
+        nExpire += 1
+        su.reset()
+    else
+        switch su.state
+
+            ST_IDLE =>
+                if kzOk and not lossLocked and not inFlatten
+                    // A sweep of BSL trades through the pool and, in the strict
+                    // mode, closes back below it. The signal stamps on that
+                    // bar's close and never moves again.
+                    throughBsl = not na(bslPool) and high > bslPool and (na(usedBsl) or bslPool != usedBsl)
+                    throughSsl = not na(sslPool) and low  < sslPool and (na(usedSsl) or sslPool != usedSsl)
+                    strict     = sweepConfirm == "Close back inside"
+                    sweptBsl   = throughBsl and (not strict or close < bslPool)
+                    sweptSsl   = throughSsl and (not strict or close > sslPool)
+                    // If both sides are taken on one bar the bar is noise, not
+                    // a sweep — skip it rather than pick a side arbitrarily.
+                    if sweptBsl != sweptSsl
+                        su.dir      := sweptBsl ? -1 : 1
+                        su.pool     := sweptBsl ? bslPool : sslPool
+                        su.sweepExt := sweptBsl ? high : low
+                        su.oppPool  := sweptBsl ? sslPool : bslPool
+                        su.state    := ST_SWEPT
+                        su.stateBar := bar_index
+                        if sweptBsl
+                            usedBsl := bslPool
+                        else
+                            usedSsl := sslPool
+                        nSweep += 1
+
+            ST_SWEPT =>
+                // The extreme can still extend while price hunts stops.
+                su.sweepExt := su.dir < 0 ? math.max(su.sweepExt, high) : math.min(su.sweepExt, low)
+                // MSS = a displacement close through the opposing confirmed
+                // swing, in the direction away from the swept pool.
+                body    = math.abs(close - open)
+                disp    = body >= atr * dispMult
+                mssRef  = su.dir < 0 ? swingLow : swingHigh
+                broke   = not na(mssRef) and (su.dir < 0 ? close < mssRef : close > mssRef)
+                if disp and broke
+                    su.state    := ST_MSS
+                    su.stateBar := bar_index
+                    nMss += 1
+
+            ST_MSS =>
+                // FVG = the 3-bar imbalance left by the displacement leg,
+                // known in full at the close of the third bar.
+                gapUp   = su.dir > 0 and high[2] < low
+                gapDn   = su.dir < 0 and low[2]  > high
+                gTop    = su.dir > 0 ? low  : low[2]
+                gBot    = su.dir > 0 ? high[2] : high
+                thick   = (gTop - gBot) >= minGapTicks * syminfo.mintick
+                // The gap has to sit inside the leg that came off the sweep,
+                // otherwise it belongs to some earlier move.
+                inLeg   = su.dir > 0 ? gBot >= su.sweepExt : gTop <= su.sweepExt
+                if (gapUp or gapDn) and thick and inLeg
+                    su.gapTop   := gTop
+                    su.gapBot   := gBot
+                    su.state    := ST_ARMED
+                    su.stateBar := bar_index
+                    nFvg += 1
+
+            ST_ARMED =>
+                isLong  = su.dir > 0
+                px      = su.entryPrice()
+                stopPx  = isLong ? su.sweepExt - atr * stopBufferAtr : su.sweepExt + atr * stopBufferAtr
+                riskPx  = math.abs(px - stopPx)
+                poolOk  = not na(su.oppPool) and (isLong ? su.oppPool > px : su.oppPool < px)
+                byPool  = targetMode == "Opposing liquidity" and poolOk
+                tgtPx   = byPool ? su.oppPool : (isLong ? px + riskPx * rMult : px - riskPx * rMult)
+                id      = isLong ? "ICT-L" : "ICT-S"
+                // JSON payload for the webhook → broker bridge. Dedupe,
+                // position sync and bracket placement happen server-side;
+                // Pine only signals.
+                msg = '{"strategy":"SWEEP-MSS-FVG","id":"' + str.tostring(bar_index) +
+                     '","side":"' + (isLong ? "buy" : "sell") +
+                     '","symbol":"' + syminfo.ticker +
+                     '","entry":' + str.tostring(px) +
+                     ',"stop":' + str.tostring(stopPx) +
+                     ',"target":' + str.tostring(tgtPx) + '}'
+                if riskPx > 0
+                    liveStop := stopPx
+                    liveTgt  := tgtPx
+                    liveId   := id
+                    strategy.entry(id, isLong ? strategy.long : strategy.short, limit = px, alert_message = msg)
+
+// The bracket is (re)issued on every bar the order or the position is alive.
+// Placing it once inside the state machine would leave the trade unprotected
+// the moment the setup object resets on fill.
+if not na(liveId) and (strategy.position_size != 0 or su.state == ST_ARMED)
+    strategy.exit("brk", liveId, stop = liveStop, limit = liveTgt,
+         alert_message = '{"strategy":"SWEEP-MSS-FVG","action":"flatten","symbol":"' + syminfo.ticker + '"}')
+
+if strategy.position_size != 0 and strategy.position_size[1] == 0
+    nFill += 1
+
+// ── Visuals ──────────────────────────────────────────────────────────────────
+plot(bslPool, "BSL pool", style = plot.style_linebr, color = color.new(color.red,  40), linewidth = 1)
+plot(sslPool, "SSL pool", style = plot.style_linebr, color = color.new(color.teal, 40), linewidth = 1)
+bgcolor(inKz ? color.new(color.gray, 92) : na, title = "Kill zone")
+bgcolor(lossLocked ? color.new(color.red, 85) : na, title = "Daily loss lock")
+
+showGap = su.state == ST_ARMED
+gT = plot(showGap ? su.gapTop : na, "FVG top", style = plot.style_linebr, color = color.new(color.orange, 30))
+gB = plot(showGap ? su.gapBot : na, "FVG bottom", style = plot.style_linebr, color = color.new(color.orange, 30))
+fill(gT, gB, color = color.new(color.orange, 85), title = "Fair value gap")
+plot(su.state != ST_IDLE ? su.sweepExt : na, "Sweep extreme", style = plot.style_linebr, color = color.fuchsia, linewidth = 2)
+
+if su.state != stateBefore and su.state != ST_IDLE
+    txt = su.state == ST_SWEPT ? "Sweep" : su.state == ST_MSS ? "MSS" : "FVG"
+    label.new(bar_index, su.dir > 0 ? low : high, txt,
+         style = su.dir > 0 ? label.style_label_up : label.style_label_down,
+         color = color.new(color.gray, 30), textcolor = color.white, size = size.small)
+
+var table hud = table.new(position.middle_left, 1, 4, border_width = 1)
+if barstate.islast
+    stName = su.state == ST_IDLE ? "Idle" : su.state == ST_SWEPT ? "Swept" : su.state == ST_MSS ? "MSS" : "Armed"
+    table.cell(hud, 0, 0, (leakMode ? "⚠ LOOK-AHEAD DEMO" : "Honest build"),
+         text_color = leakMode ? color.black : color.white,
+         bgcolor = leakMode ? color.yellow : color.new(color.gray, 20), text_size = size.small)
+    table.cell(hud, 0, 1, "Setup: " + stName + (su.state != ST_IDLE ? (su.dir > 0 ? " ▲" : " ▼") : ""),
+         text_color = color.white, bgcolor = color.new(color.gray, 20), text_size = size.small)
+    table.cell(hud, 0, 2, "Sweep " + str.tostring(nSweep) + " → MSS " + str.tostring(nMss) +
+         " → FVG " + str.tostring(nFvg) + " → Fill " + str.tostring(nFill),
+         text_color = color.yellow, bgcolor = color.new(color.gray, 20), text_size = size.small)
+    table.cell(hud, 0, 3, "Unfilled/expired " + str.tostring(nExpire) + " · Day P&L " + str.tostring(math.round(dayPnl)),
+         text_color = lossLocked ? color.red : color.orange, bgcolor = color.new(color.gray, 20), text_size = size.small)
