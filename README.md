@@ -8,7 +8,7 @@ Liquidity pool → Sweep → Market Structure Shift (displacement) → FVG → l
 ```
 
 Built for index futures (MNQ / MES / NQ / ES) on 1–15 minute charts, with kill
-zones, an opposing-liquidity target, and prop-firm guards (daily loss lock,
+zones, an opposing-liquidity target, and risk guards (daily loss lock,
 timed flatten).
 
 The point of this repository is not that it implements ICT concepts. It is
@@ -29,7 +29,7 @@ non-repainting claim is proven rather than asserted** — see
 | **Stop** | Beyond the **sweep extreme** plus an ATR buffer — the level that invalidates the premise, not a fixed distance. |
 | **Target** | The **opposing liquidity pool**, with an R-multiple fallback when no pool qualifies. |
 | **Kill zones** | London and New York windows, timezone-aware via `input.session` + an explicit timezone. Setups outside the windows are not taken. |
-| **Prop-firm guards** | Daily loss lock (no new setups after the day's P&L breaches the limit) and a timed flatten window. |
+| **Risk guards** | Daily loss lock (no new setups after the day's P&L breaches the limit) and a timed flatten window. |
 
 Each setup lives in a typed `Setup` object with an explicit phase
 (`Idle → Swept → MSS → Armed`) and its own expiry per phase, so a stale setup
@@ -76,6 +76,10 @@ and no backtest figure is quoted here as a performance claim.
 
 Related: [brrc-pine-strategy](https://github.com/guillemustafa-ux/brrc-pine-strategy) —
 the same engineering approach applied to a continuation setup.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Disclaimer
 

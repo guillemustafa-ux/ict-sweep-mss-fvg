@@ -1,5 +1,5 @@
 //@version=6
-strategy("ICT — Liquidity Sweep · MSS · FVG (index futures)",
+strategy("Liquidity Sweep, MSS and FVG Entry Model with Look-ahead A/B",
      shorttitle = "SWEEP-MSS-FVG",
      overlay = true,
      initial_capital = 25000,
@@ -81,7 +81,7 @@ londonKz  = input.session("0200-0500", "London window", group = grpK)
 useNy     = input.bool(true, "New York kill zone", group = grpK)
 nyKz      = input.session("0830-1100", "New York window", group = grpK)
 
-grpG = "Prop-firm guards"
+grpG = "Risk guards"
 useDailyLock = input.bool(true, "Stop trading after a daily loss", group = grpG)
 maxDailyLoss = input.float(600, "Daily loss limit (account currency)", minval = 1, group = grpG)
 useFlatten   = input.bool(true, "Flatten at a fixed time", group = grpG)
@@ -89,7 +89,8 @@ flattenSess  = input.session("1555-1600", "Flatten window", group = grpG)
 
 grpD = "Look-ahead A/B demo"
 leakMode = input.bool(false, "DEMO — leak the CURRENT day's high/low into history", group = grpD,
-     tooltip = "OFF (default) is the honest build: pools are the PREVIOUS day's extremes. " +
+     tooltip = "This is a demonstration only: keep it OFF for any real evaluation. " +
+               "OFF (default) is the honest build: pools are the PREVIOUS day's extremes. " +
                "ON reproduces the classic request.security() look-ahead bug, where every intraday bar already " +
                "knows today's final high and low. Compare the two equity curves in the Strategy Tester: " +
                "the difference is the size of the lie, not the size of the edge.")
