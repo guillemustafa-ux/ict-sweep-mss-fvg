@@ -53,7 +53,7 @@ LIMITATIONS
 - Confirmed pivots lag by the right-hand pivot length, so structure is recognized late in fast moves. This is a deliberate trade-off against repainting.
 - Backtest results do not guarantee future results. Not financial advice. Futures trading carries substantial risk of loss.
 
-The chart shows MNQ1! on the 5-minute timeframe. The Strategy Tester report covers [DATE RANGE] with [N] closed trades using the default properties above.
+The chart shows MNQ1! on the 5-minute timeframe. The Strategy Tester report uses Deep Backtesting over the entire available history (first trade on 2019-05-06, through 2026-10-11) with 1,145 closed trades and the default properties above. The default chart range alone covers a few months and far fewer trades.
 
 ---
 
