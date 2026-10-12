@@ -91,8 +91,8 @@ grpD = "Look-ahead A/B demo"
 leakMode = input.bool(false, "DEMO — leak the CURRENT day's high/low into history", group = grpD,
      tooltip = "This is a demonstration only: keep it OFF for any real evaluation. " +
                "OFF (default) is the honest build: pools are the PREVIOUS day's extremes. " +
-               "ON reproduces the classic request.security() look-ahead bug, where every intraday bar already " +
-               "knows today's final high and low. Compare the two equity curves in the Strategy Tester: " +
+               "ON reproduces the classic request.security() look-ahead bug, where every historical intraday bar " +
+               "already knows its day's final high and low. Compare the two equity curves in the Strategy Tester: " +
                "the difference is the size of the lie, not the size of the edge.")
 
 // ── Daily liquidity pools ────────────────────────────────────────────────────

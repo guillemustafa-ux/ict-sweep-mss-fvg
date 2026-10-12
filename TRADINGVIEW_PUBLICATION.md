@@ -33,7 +33,7 @@ HOW TO CHECK THE NON-REPAINTING CLAIM
 Signals are evaluated on bar close, daily pools use high[1] and low[1] with lookahead on (the last closed daily bar), and swing pools are used only after the pivot is confirmed.
 1. Add the script to MNQ1! or MES1! on 5 minutes with a fixed date range.
 2. With the demo input OFF, record net profit, profit factor, max drawdown and trade count. The table reads "Honest build".
-3. Turn the demo input ON and change nothing else. The table reads "LOOK-AHEAD DEMO": every intraday bar already knows the day's final high and low.
+3. Turn the demo input ON and change nothing else. The table reads "LOOK-AHEAD DEMO": on historical bars, every intraday bar already knows its day's final high and low.
 4. Compare. The gap is the look-ahead error, not an edge.
 The demo must stay OFF for any real evaluation. It isolates one repainting vector: a method, not a certificate.
 
