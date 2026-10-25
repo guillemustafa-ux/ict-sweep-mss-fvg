@@ -2,7 +2,7 @@
 strategy("Liquidity Sweep, MSS and FVG Entry Model with Look-ahead A/B",
      shorttitle = "SWEEP-MSS-FVG",
      overlay = true,
-     initial_capital = 25000,
+     initial_capital = 100000,  // one NQ or ES contract at 5% margin fits; micros need about a tenth
      default_qty_type = strategy.fixed,
      default_qty_value = 1,
      margin_long = 5,       // futures margin is ~4-5% of notional; the v5+
@@ -214,7 +214,6 @@ var float usedSsl = na
 var int nSweep = 0
 var int nMss   = 0
 var int nFvg   = 0
-var int nFill  = 0
 var int nExpire= 0
 
 stateBefore = su.state
@@ -324,8 +323,20 @@ if not na(liveId) and (strategy.position_size != 0 or su.state == ST_ARMED)
     strategy.exit("brk", liveId, stop = liveStop, limit = liveTgt,
          alert_message = '{"strategy":"SWEEP-MSS-FVG","action":"flatten","symbol":"' + syminfo.ticker + '"}')
 
-if strategy.position_size != 0 and strategy.position_size[1] == 0
-    nFill += 1
+// Entry fills, one per trade (no pyramiding). Read from the trade lists, not
+// from position_size: a trade that enters on a bar's close and exits inside the
+// next bar is never seen as an open position at any bar close.
+nFill = strategy.closedtrades + strategy.opentrades
+
+// Margin one contract needs at the header's 5%. Pine cannot read margin_long
+// back, so keep MARGIN_PCT equal to it (if Properties change the margin, this
+// row is off). Room = equity minus margin, the available funds once one
+// contract is open: when they run out, a margin call liquidates the position.
+// A room under one ATR means an adverse move of about one ATR does it.
+MARGIN_PCT = 5.0
+marginPerContract = strategy.convert_to_account(syminfo.pointvalue * close) * MARGIN_PCT / 100
+roomBeforeCall    = strategy.equity - marginPerContract
+roomLow           = roomBeforeCall < strategy.convert_to_account(atr * syminfo.pointvalue)
 
 // ── Visuals ──────────────────────────────────────────────────────────────────
 plot(bslPool, "BSL pool", style = plot.style_linebr, color = color.new(color.red,  40), linewidth = 1)
@@ -345,7 +356,7 @@ if su.state != stateBefore and su.state != ST_IDLE
          style = su.dir > 0 ? label.style_label_up : label.style_label_down,
          color = color.new(color.gray, 30), textcolor = color.white, size = size.small)
 
-var table hud = table.new(position.middle_left, 1, 4, border_width = 1)
+var table hud = table.new(position.middle_left, 1, 5, border_width = 1)
 if barstate.islast
     stName = su.state == ST_IDLE ? "Idle" : su.state == ST_SWEPT ? "Swept" : su.state == ST_MSS ? "MSS" : "Armed"
     table.cell(hud, 0, 0, (leakMode ? "⚠ LOOK-AHEAD DEMO" : "Honest build"),
@@ -358,3 +369,8 @@ if barstate.islast
          text_color = color.yellow, bgcolor = color.new(color.gray, 20), text_size = size.small)
     table.cell(hud, 0, 3, "Unfilled/expired " + str.tostring(nExpire) + " · Day P&L " + str.tostring(math.round(dayPnl)),
          text_color = lossLocked ? color.red : color.orange, bgcolor = color.new(color.gray, 20), text_size = size.small)
+    roomTxt = "Margin/contract at 5% " + str.tostring(math.round(marginPerContract)) + " · Equity " + str.tostring(math.round(strategy.equity)) +
+         " · Room " + str.tostring(math.round(roomBeforeCall))
+    table.cell(hud, 0, 4, roomLow ? "⚠ " + roomTxt + (roomBeforeCall < 0 ? " (margin above equity)" : " (< 1 ATR)") + ": use MNQ/MES or raise the capital" : roomTxt,
+         text_color = roomLow ? color.black : color.white,
+         bgcolor = roomLow ? color.yellow : color.new(color.gray, 20), text_size = size.small)

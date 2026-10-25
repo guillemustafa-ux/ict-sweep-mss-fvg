@@ -38,7 +38,7 @@ Signals are evaluated on bar close, daily pools use high[1] and low[1] with look
 The demo must stay OFF for any real evaluation. It isolates one repainting vector: a method, not a certificate.
 
 STRATEGY PROPERTIES (defaults, published as they are)
-- Initial capital: 25,000, realistic for one micro futures contract.
+- Initial capital: 100,000. At 5% margin one NQ contract at 25,000 needs about 25,000 of collateral (point value 20 x price x 5%), so 100,000 holds one NQ or ES contract. MNQ and MES need about a tenth of the NQ/ES margin, so there the larger capital mostly changes the percentage figures.
 - Order size: 1 contract, fixed.
 - Margin: 5% long and short, in line with futures margin as a share of notional.
 - Commission: 2.25 per contract per side, a plausible all-in cost for micro futures.
@@ -53,7 +53,7 @@ LIMITATIONS
 - Confirmed pivots lag by the right-hand pivot length, so structure is recognized late in fast moves. This is a deliberate trade-off against repainting.
 - Backtest results do not guarantee future results. Not financial advice. Futures trading carries substantial risk of loss.
 
-The chart shows MNQ1! on the 5-minute timeframe. The Strategy Tester report uses Deep Backtesting over the entire available history (first trade on 2019-05-06, through 2026-10-11) with 1,145 closed trades and the default properties above. The default chart range alone covers a few months and far fewer trades.
+The chart shows MNQ1! on the 5-minute timeframe. The Strategy Tester report uses Deep Backtesting over the entire available history (first trade on 2019-05-06, last on 2026-10-21) with 1,157 closed trades and the default properties above. The default chart range alone covers a few months and far fewer trades.
 
 ---
 
@@ -64,8 +64,19 @@ The chart shows MNQ1! on the 5-minute timeframe. The Strategy Tester report uses
 3. Strategy Tester with the default inputs and default properties:
    - More than 100 closed trades. If fewer, widen the date range with Deep Backtesting before changing anything else.
    - No caution warning in the report.
-   - Properties tab equals the STRATEGY PROPERTIES section above (25,000 capital, 1 contract, 5% margin, 2.25 per contract commission, 1 tick slippage, process orders on close).
+   - Properties tab equals the STRATEGY PROPERTIES section above (100,000 capital, 1 contract, 5% margin, 2.25 per contract commission, 1 tick slippage, process orders on close).
 4. Confirm the look-ahead demo input is OFF (the table reads "Honest build").
 5. Fill the placeholder line at the end of the description with the actual date range and trade count.
 6. Publish as Public and Open-source. Categories: Chart patterns or Support and resistance, plus Futures if available.
 7. Check the description for links, contact info and promotion: there must be none, and no performance figures.
+
+## Update 1 (2026-10-25): release notes (paste as is, everything between the two rules)
+
+Flow (TradingView docs, "Publishing scripts"): switch back to the clean MNQ1! 5m chart of checklist item 2 (no other scripts, demo OFF, the updated script on the chart) before opening Publish…, because the page captures whatever chart is open > Pine Editor > Publish… > Update existing script > pick the publication in the first field > leave the chart checkbox unchecked so the page captures the current chart > release notes > Continue > Publish new version. Release notes are final the moment they are published. Refresh the last paragraph of the description (date range and closed-trade count) in the same dialog.
+
+---
+- Initial capital raised from 25,000 to 100,000. At 5% margin one contract needs point value x price x 5% of collateral: about 2,500 on MNQ at 25,000, but about 25,000 on NQ, the whole previous account. On NQ1! 15m (2025-11-30 to 2026-10-23) the previous version opened one trade, with about 6 of room above the margin, and closed it with a margin call. 100,000 holds one NQ or ES contract. MNQ and MES need about a tenth of the NQ/ES margin, so there the larger capital mostly changes the percentage figures: net profit % and drawdown % are not comparable with the previous version.
+- New HUD row: margin per contract at the 5% of the defaults, current equity and the room between them, with a warning when that room is under one ATR (the strategy's ATR input).
+- The HUD "Fill" counter now reads strategy.closedtrades + strategy.opentrades, so it counts filled trades. The previous counter compared the position size between bar closes and missed any trade that entered on a bar's close and exited inside the next bar, or opened and closed inside one bar, so the HUD could show Fill 0 with trades in the list.
+- No change to pools, sweep, MSS, FVG, entry, stop, target, kill zones, guards or the look-ahead A/B.
+---

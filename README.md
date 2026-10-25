@@ -56,7 +56,17 @@ rules.
 2. Suggested context: **MNQ1! or MES1!, 5m**, kill zones on.
 3. The on-chart HUD shows the live setup state and the funnel counters
    (`Sweep → MSS → FVG → Fill`, plus expiries and day P&L) — the instrumentation
-   used to debug where setups die.
+   used to debug where setups die. `Fill` is read from `strategy.closedtrades +
+   strategy.opentrades`, so it counts filled trades, including one that enters on
+   a bar's close and exits inside the next bar. It counts trades, not setups: a
+   setup whose first trade closes within one bar stays armed and can place a
+   second order. A last row shows the margin one contract needs at the header's
+   5%, the current equity and the room between them (the available funds once
+   one contract is open), and warns when that room is under one ATR: below
+   zero, entries did not fill in the observed run; between zero and one ATR an
+   entry can fill, and an adverse move of about one ATR or less triggers a
+   margin call. NQ at 25,000 needs about 25,000 of margin; MNQ about a tenth
+   of that.
 4. Alerts emit a JSON `alert_message` for a webhook → broker bridge. Order
    dedupe, position sync and bracket placement belong server-side; Pine only
    signals.
