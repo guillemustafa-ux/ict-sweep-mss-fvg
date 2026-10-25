@@ -58,9 +58,11 @@ rules.
    (`Sweep → MSS → FVG → Fill`, plus expiries and day P&L) — the instrumentation
    used to debug where setups die. `Fill` is read from `strategy.closedtrades +
    strategy.opentrades`, so it counts filled trades, including one that enters on
-   a bar's close and exits inside the next bar. It counts trades, not setups: a
-   setup whose first trade closes within one bar stays armed and can place a
-   second order. A last row shows the margin one contract needs at the header's
+   a bar's close and exits inside the next bar. One setup yields at most one
+   trade: once its trade has been counted, the setup closes, even when that
+   trade opened and closed between two bar closes, so with the default order
+   size `Fill` never exceeds `FVG`.
+   A last row shows the margin one contract needs at the header's
    5%, the current equity and the room between them (the available funds once
    one contract is open), and warns when that room is under one ATR: below
    zero, entries did not fill in the observed run; between zero and one ATR an

@@ -220,9 +220,24 @@ stateBefore = su.state
 expired = su.state != ST_IDLE and bar_index - su.stateBar >
      (su.state == ST_SWEPT ? sweepMaxBars : su.state == ST_MSS ? fvgSearchBars : armedMaxBars)
 
-if strategy.position_size != 0
-    // A live trade owns the chart; the next setup starts from scratch.
+// One setup, one trade. A trade that enters and exits between two bar closes
+// (an entry on a bar's close stopped out inside the next bar, or a fill and
+// an exit inside one bar) is never an open position at any close, so the
+// armed setup would place the same order again. The trade count catches it:
+// closedtrades + opentrades grows by one at every entry fill.
+int tradesNow = strategy.closedtrades + strategy.opentrades
+var int tradesSeen = 0
+tradeHappened = tradesNow > tradesSeen
+tradesSeen := tradesNow
+
+if strategy.position_size != 0 or tradeHappened
+    // A live trade owns the chart, and a setup that already had its trade is
+    // done: the next setup starts from scratch.
     su.reset()
+    if strategy.position_size == 0
+        liveId   := na
+        liveStop := na
+        liveTgt  := na
 else
     if expired
         strategy.cancel("ICT-L")
@@ -323,10 +338,9 @@ if not na(liveId) and (strategy.position_size != 0 or su.state == ST_ARMED)
     strategy.exit("brk", liveId, stop = liveStop, limit = liveTgt,
          alert_message = '{"strategy":"SWEEP-MSS-FVG","action":"flatten","symbol":"' + syminfo.ticker + '"}')
 
-// Entry fills, one per trade (no pyramiding). Read from the trade lists, not
-// from position_size: a trade that enters on a bar's close and exits inside the
-// next bar is never seen as an open position at any bar close.
-nFill = strategy.closedtrades + strategy.opentrades
+// Entry fills, one per trade (no pyramiding), read from the trade lists for
+// the reason given above the state machine.
+nFill = tradesNow
 
 // Margin one contract needs at the header's 5%. Pine cannot read margin_long
 // back, so keep MARGIN_PCT equal to it (if Properties change the margin, this
