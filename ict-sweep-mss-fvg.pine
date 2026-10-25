@@ -162,7 +162,31 @@ if na(dayStartEquity) or timeframe.change("D")
 dayPnl     = strategy.equity - dayStartEquity
 lossLocked = useDailyLock and dayPnl <= -maxDailyLoss
 
-inFlatten = useFlatten and not na(time(timeframe.period, flattenSess, tz))
+// A session window shorter than the chart bar never contains a bar OPEN, and
+// time(timeframe.period, session, tz) tests the open: with the default
+// 15:55-16:00 on a 15-minute chart it was na on every bar, so nothing was ever
+// flattened. The window is tested against the bar's whole span instead, and
+// fires on the bar that covers any part of it, closing at that bar's close.
+// The optional days suffix of the session string (":23456", 1 = Sunday) is
+// kept and tested on the day of the bar's open.
+sessParts(string s) =>
+    p    = str.split(s, ":")
+    hhmm = str.split(array.get(p, 0), "-")
+    a    = str.tonumber(array.get(hhmm, 0))
+    b    = str.tonumber(array.get(hhmm, 1))
+    days = array.size(p) > 1 ? array.get(p, 1) : "1234567"
+    [math.floor(a / 100) * 60 + a % 100, math.floor(b / 100) * 60 + b % 100, days]
+
+barSpans(float startMin, float endMin) =>
+    openMin  = hour(time, tz) * 60 + minute(time, tz)
+    closeMin = hour(time_close, tz) * 60 + minute(time_close, tz)
+    // A bar that closes inside the minute it opened (seconds charts) counts as one minute.
+    closeMin := closeMin < openMin ? closeMin + 1440 : closeMin == openMin ? closeMin + 1 : closeMin
+    endMin > startMin ? (openMin < endMin and closeMin > startMin) : (openMin < endMin or closeMin > startMin)
+
+[flatStart, flatEnd, flatDays] = sessParts(flattenSess)
+flatDayOk = str.contains(flatDays, str.tostring(dayofweek(time, tz)))
+inFlatten = useFlatten and timeframe.isintraday and flatDayOk and barSpans(flatStart, flatEnd)
 if inFlatten and strategy.position_size != 0
     strategy.close_all("flatten", alert_message = '{"strategy":"SWEEP-MSS-FVG","action":"flatten","symbol":"' + syminfo.ticker + '"}')
 

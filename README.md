@@ -28,8 +28,8 @@ non-repainting claim is proven rather than asserted** — see
 | **Entry** | A resting **limit order** at the proximal, distal or midpoint edge of the gap. A fill is a real touch, not a same-bar assumption. Cancelled if unfilled after N bars. |
 | **Stop** | Beyond the **sweep extreme** plus an ATR buffer — the level that invalidates the premise, not a fixed distance. |
 | **Target** | The **opposing liquidity pool**, with an R-multiple fallback when no pool qualifies. |
-| **Kill zones** | London and New York windows, timezone-aware via `input.session` + an explicit timezone. Setups outside the windows are not taken. |
-| **Risk guards** | Daily loss lock (no new setups after the day's P&L breaches the limit) and a timed flatten window. |
+| **Kill zones** | London and New York windows, timezone-aware via `input.session` + an explicit timezone, tested on the bar's open time. Setups outside the windows are not taken. |
+| **Risk guards** | Daily loss lock (no new setups after the day's P&L breaches the limit) and a timed flatten window, matched against each bar's open-to-close span so it also fires on bars longer than the window (on 15m the 15:45 bar closes the position at 16:00). |
 
 Each setup lives in a typed `Setup` object with an explicit phase
 (`Idle → Swept → MSS → Armed`) and its own expiry per phase, so a stale setup
