@@ -23,8 +23,12 @@ pdh = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahe
 
 On historical bars this returns the **finished** high of the day the bar
 belongs to. A 09:45 bar is handed the day's final high — a number that will
-not exist for another six hours. Sweeps of that level look surgical. Live, the
-value crawls upward all day and the signals never reproduce.
+not exist for another six hours. What that does to a backtest depends on how
+the rules use the level. A limit order resting at it is filled at that price once
+price reaches it, by the broker emulator's rules, and that price is the top of
+the day. A rule that waits for price to trade *through* it — a sweep — never
+fires on it, because no bar of that day trades beyond its own final high. Live,
+the value crawls upward all day, and neither kind of trade reproduces.
 
 The fix used here:
 
@@ -104,11 +108,19 @@ previous day's closed bar or from the current day's finished extremes.
 3. Turn it **on**, change nothing else. The HUD reads `⚠ LOOK-AHEAD DEMO`.
 4. Compare.
 
-The leaked version sells the exact high of the day and buys the exact low,
-because that is precisely what it was told. The gap between the two equity
-curves is not an edge. It is the size of the lie — and it is roughly the size
-of the gap between a backtest that sold a strategy and a live account that
-disproved it.
+Do not expect the leaked build to win. In this model the daily level is both
+a pool to sweep and a possible target. Leaked, it can no longer be swept on
+its own day, and when it is the nearest pool it blocks that side; it can
+still be the target on the other side. On MNQ1! 15m with the default inputs,
+over one run (first trade 1 Dec 2025, last 20 Oct 2026), the leaked build
+closed 50 trades against 62 and lost more (net -1,224.50 against -196.50
+USD); matched by entry, it kept 45 of the honest
+entries, dropped 17 and added 5. Both runs lost money, so neither shows an
+edge.
+
+The direction of the gap is not the point. The gap between the two equity
+curves is the size of the error, not the size of an edge, and a result built
+on the leak says nothing either way.
 
 Two honest caveats about what this demo does and does not show:
 
